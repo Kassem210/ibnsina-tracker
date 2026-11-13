@@ -109,6 +109,16 @@ table{border-collapse:collapse;width:100%}
 .pos-stats div{display:flex;flex-direction:column;gap:2px;min-width:0}
 .pos-stats .v{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:19px;font-weight:500}
 .advice{border-left:3px solid var(--accent);padding:2px 0 2px 12px;max-width:70ch}
+.tabs{display:flex;gap:8px;flex-wrap:wrap}
+.tab{display:flex;align-items:center;gap:10px;font:600 15px var(--display);padding:9px 14px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--ink);cursor:pointer}
+.tab small{font:400 12px var(--body);color:var(--muted)}
+.tab[aria-pressed="true"]{border-color:var(--ink);box-shadow:inset 0 -3px 0 var(--ink)}
+.pf td,.pf th{padding:9px 8px;border-top:1px solid var(--line);text-align:right;white-space:nowrap}
+.pf th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:500;border-top:0}
+.pf td:first-child,.pf th:first-child{text-align:left}
+.pf tbody tr{cursor:pointer}
+.pf tbody tr:hover td{background:var(--bg)}
+.pf tfoot td{font-weight:600;border-top:2px solid var(--ink)}
 .live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--buy);margin-right:6px;vertical-align:middle}
 .live.stale{background:var(--hold)}
 </style>
@@ -119,14 +129,21 @@ table{border-collapse:collapse;width:100%}
 <div class="wrap">
   <header class="top">
     <div class="tk">
-      <span class="label">EGX: ISPH &middot; Egyptian Exchange &middot; EGP</span>
-      <h1>Ibnsina Pharma</h1>
+      <span class="label" id="tkLabel">Egyptian Exchange &middot; EGP</span>
+      <h1 id="tkName">Stock tracker</h1>
     </div>
     <div class="tk" style="align-items:flex-end">
       <div class="quote"><span class="px num" id="px">&ndash;</span><span class="num" id="chg"></span></div>
       <span class="muted" id="asof" style="font-size:12px">Loading the latest reading&hellip;</span>
     </div>
   </header>
+
+  <nav class="tabs" id="tabs" aria-label="Stock"></nav>
+
+  <section class="panel stack" id="pfPanel" aria-labelledby="pfH" hidden>
+    <div class="chart-head"><h2 id="pfH">Your portfolio</h2><span class="muted" style="font-size:12px" id="pfWhere"></span></div>
+    <div class="scroll"><table class="pf num" id="pf"></table></div>
+  </section>
 
   <div class="panel" id="empty">
     <h2 id="emptyH">Loading today's signal</h2>
@@ -175,7 +192,7 @@ table{border-collapse:collapse;width:100%}
           <button type="button" id="r63" data-n="63">3M</button><button type="button" id="r126" data-n="126">6M</button><button type="button" id="r252" data-n="252" aria-pressed="true">1Y</button><button type="button" id="r520" data-n="520">2Y</button>
         </div>
       </div>
-      <svg id="chart" role="img" aria-label="ISPH closing price with 50-day and 200-day averages and past buy and sell signals"></svg>
+      <svg id="chart" role="img" aria-label="Closing price with 50-day and 200-day averages and past buy and sell signals"></svg>
       <div class="legend"><span><i style="border-color:var(--ink)"></i>Close</span><span><i style="border-color:var(--accent)"></i>50-day average</span><span><i style="border-color:var(--hold);border-top-style:dashed"></i>200-day average</span><span id="lgCost" hidden><i style="border-color:var(--buy);border-top-style:dotted"></i>Your buy price</span><span><b style="color:var(--buy)">&#9650;</b> Buy signal</span><span><b style="color:var(--sell)">&#9660;</b> Sell signal</span></div>
       <div id="tip" class="num"></div>
     </section>
@@ -222,13 +239,14 @@ table{border-collapse:collapse;width:100%}
     </section>
   </main>
 
-  <p class="foot">This tracker is a research aid built on public price data and news. It is not investment advice and it can be wrong. Prices come from Yahoo Finance, which publishes daily figures for this stock and can lag the exchange, so the page shows the latest closing price, updated once a day. Decide for yourself and size positions so that a wrong call is survivable.</p>
+  <p class="foot">This tracker is a research aid built on public price data and news. It is not investment advice and it can be wrong. Prices are daily closing figures from Yahoo Finance and StockAnalysis, updated once a day after the Cairo close, and can lag the exchange. Decide for yourself and size positions so that a wrong call is survivable.</p>
 </div>
 
 <script>
 (function(){
   var $=function(id){return document.getElementById(id)};
-  var S={latest:null,prices:null,analysis:null,log:[],n:252,pos:null};
+  var SYMS=['ISPH','ACTF'], NAMES={ISPH:'Ibnsina Pharma',ACTF:'Act Financial'};
+  var S={sym:'ISPH',all:{},posAll:{},latest:null,prices:null,analysis:null,log:[],n:252,pos:null};
   try{var sn=+localStorage.getItem('isph-range'); if(sn) S.n=sn}catch(e){}
   function el(tag,cls,txt){var e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; return e}
   function f2(x){return x==null?'–':Number(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
@@ -241,7 +259,7 @@ table{border-collapse:collapse;width:100%}
   function renderLatest(){
     var L=S.latest; if(!L) return;
     $('empty').hidden=true; $('main').hidden=false;
-    $('px').textContent=f2(L.close);
+    $('px').textContent=f2(L.close); $('tkName').textContent=L.name||S.sym; $('tkLabel').textContent='EGX: '+S.sym+' · Egyptian Exchange · EGP';
     var c=$('chg'); c.textContent=(L.change_pct>0?'+':'')+Number(L.change_pct).toFixed(2)+'%'; c.className='num '+(L.change_pct>=0?'up':'down');
     var age=(Date.now()-new Date(L.updated_at).getTime())/36e5;
     var as=$('asof'); as.textContent=''; as.appendChild(el('span','live'+(age>30?' stale':''))); as.appendChild(document.createTextNode('Price of '+day(L.asof)+' · last analysed '+new Date(L.updated_at).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})));
@@ -348,8 +366,9 @@ table{border-collapse:collapse;width:100%}
   var rz; window.addEventListener('resize',function(){clearTimeout(rz); rz=setTimeout(renderChart,120)});
 
   // ---------- position ----------
-  var KEY='isph-position', posDoc=null;
-  function readLocal(){ try{ var p=JSON.parse(localStorage.getItem(KEY)||'null'); if(p&&p.shares>0&&p.cost>0) return p }catch(e){} return null }
+  var userDocs=null;
+  function lkey(sym){return 'pos-'+sym}
+  function readLocal(sym){ try{ var p=JSON.parse(localStorage.getItem(lkey(sym))||(sym==='ISPH'?localStorage.getItem('isph-position'):null)||'null'); if(p&&p.shares>0&&p.cost>0) return p }catch(e){} return null }
   function egp(x){return 'EGP '+Number(x).toLocaleString('en-US',{maximumFractionDigits:0})}
   function renderPos(){
     var L=S.latest, P=S.pos, st=$('posStats'), ad=$('advice'); if(!L) return;
@@ -375,36 +394,70 @@ table{border-collapse:collapse;width:100%}
     if(L.close<=lv.stop) t+=' The price is at or under the suggested stop.';
     ad.textContent=t;
   }
-  function setPos(p,fromRemote){ S.pos=p; if(!fromRemote){ try{ p?localStorage.setItem(KEY,JSON.stringify(p)):localStorage.removeItem(KEY) }catch(e){}
-      if(posDoc){ (p?posDoc.set({shares:p.shares,cost:p.cost,updated:new Date().toISOString()}):posDoc.delete()).then(function(){ $('posMsg').textContent=p?'Saved to your account. It will show on your other devices.':'Removed.' },function(){ $('posMsg').textContent=p?'Saved on this device only.':'Removed from this device.' }) }
+  function setPos(p,fromRemote,sym){ sym=sym||S.sym; if(p) S.posAll[sym]=p; else delete S.posAll[sym]; if(sym===S.sym) S.pos=p;
+    if(!fromRemote){ try{ p?localStorage.setItem(lkey(sym),JSON.stringify(p)):localStorage.removeItem(lkey(sym)); if(sym==='ISPH') localStorage.removeItem('isph-position') }catch(e){}
+      if(userDocs){ var dref=userDocs.doc(sym); (p?dref.set({shares:p.shares,cost:p.cost,updated:new Date().toISOString()}):dref.delete()).then(function(){ $('posMsg').textContent=p?'Saved to your account. It will show on your other devices.':'Removed.' },function(){ $('posMsg').textContent=p?'Saved on this device only.':'Removed from this device.' }) }
       else $('posMsg').textContent=p?'Saved on this device.':'Removed.' }
-    renderPos(); renderChart() }
+    renderPos(); renderChart(); renderPortfolio() }
   $('posForm').addEventListener('submit',function(e){ e.preventDefault();
     var sh=parseFloat(String($('posShares').value).replace(/,/g,'')), co=parseFloat(String($('posCost').value).replace(/,/g,''));
     if(!(sh>0)||!(co>0)){ $('posMsg').textContent='Enter the number of shares and your average buy price, both above zero.'; return }
     setPos({shares:sh,cost:co}) });
   $('posClear').addEventListener('click',function(){ $('posShares').value=''; $('posCost').value=''; setPos(null) });
-  S.pos=readLocal();
-  $('posWhere').textContent='Kept on this device';
+  SYMS.forEach(function(sym){ var p=readLocal(sym); if(p) S.posAll[sym]=p });
+  $('posWhere').textContent='Kept on this device'; $('pfWhere').textContent='Kept on this device';
   if(window.claude&&window.claude.use){ Promise.all([window.claude.use('db'),window.claude.use('user')]).then(function(r){
     var db=r[0], user=r[1]; if(!db||!user||!user.id) return;
-    return user.id().then(function(id){ if(!id) return; posDoc=db.doc('data/users/'+id+'/position');
-      $('posWhere').textContent='Private to you · synced to your Claude account';
-      return posDoc.get().then(function(sn){ var d=sn.exists&&sn.data(); if(d&&d.shares>0&&d.cost>0) setPos({shares:d.shares,cost:d.cost},true); else if(S.pos) posDoc.set({shares:S.pos.shares,cost:S.pos.cost,updated:new Date().toISOString()}).catch(function(){}) }) })
-  }).catch(function(){ posDoc=null; $('posWhere').textContent='Kept on this device' }) }
+    return user.id().then(function(id){ if(!id) return; userDocs=db.collection('data/users/'+id);
+      $('posWhere').textContent='Private to you · synced to your Claude account'; $('pfWhere').textContent='Private to you';
+      return Promise.all(SYMS.map(function(sym){ return userDocs.doc(sym).get().then(function(sn){ var d=sn.exists&&sn.data();
+        if(d&&d.shares>0&&d.cost>0) setPos({shares:d.shares,cost:d.cost},true,sym);
+        else if(S.posAll[sym]) userDocs.doc(sym).set({shares:S.posAll[sym].shares,cost:S.posAll[sym].cost,updated:new Date().toISOString()}).catch(function(){}) }) })) })
+  }).catch(function(){ userDocs=null; $('posWhere').textContent='Kept on this device' }) }
+
+  // ---------- portfolio and stock switcher ----------
+  function renderTabs(){ var nav=$('tabs'); nav.textContent='';
+    SYMS.forEach(function(sym){ var D=S.all[sym], L=D&&D.latest; var b=el('button','tab'); b.type='button'; b.id='tab-'+sym; b.setAttribute('aria-pressed',String(sym===S.sym));
+      b.appendChild(el('span',null,sym)); b.appendChild(el('small',null,NAMES[sym]));
+      if(L){ b.appendChild(el('span','num',f2(L.close))); b.appendChild(el('span','tag '+L.signal,L.signal)) }
+      b.addEventListener('click',function(){ select(sym,true) }); nav.appendChild(b) }) }
+  function signed(x){return (x>=0?'+':'−')+Number(Math.abs(x)).toLocaleString('en-US',{maximumFractionDigits:0})}
+  function renderPortfolio(){
+    var held=SYMS.filter(function(sym){return S.posAll[sym]&&S.all[sym]&&S.all[sym].latest}); $('pfPanel').hidden=!held.length; if(!held.length) return;
+    var t=$('pf'); t.textContent=''; var th=el('thead'), hr=el('tr'); ['Stock','Shares @ cost','Price','Value, EGP','Profit / loss, EGP','%','Signal'].forEach(function(h){hr.appendChild(el('th',null,h))}); th.appendChild(hr); t.appendChild(th);
+    var tb=el('tbody'), tv=0, tc=0;
+    held.forEach(function(sym){ var P=S.posAll[sym], L=S.all[sym].latest, v=P.shares*L.close, c=P.shares*P.cost, pl=v-c; tv+=v; tc+=c;
+      var r=el('tr'); r.tabIndex=0; r.setAttribute('role','button');
+      [sym,f0(P.shares)+' @ '+f2(P.cost),f2(L.close),f0(v),signed(pl),pct((L.close/P.cost-1)*100)].forEach(function(x,i){ var td=el('td',i>=4?(pl>=0?'up':'down'):null,x); r.appendChild(td) });
+      var td=el('td'); td.appendChild(el('span','tag '+L.signal,L.signal)); r.appendChild(td);
+      r.addEventListener('click',function(){select(sym,true)}); r.addEventListener('keydown',function(e){ if(e.key==='Enter') select(sym,true) }); tb.appendChild(r) });
+    t.appendChild(tb);
+    var tf=el('tfoot'), fr=el('tr'), tpl=tv-tc; ['Total','','',f0(tv),signed(tpl),pct((tv/tc-1)*100),''].forEach(function(x,i){ fr.appendChild(el('td',i>=4&&i<6?(tpl>=0?'up':'down'):null,x)) }); tf.appendChild(fr); t.appendChild(tf);
+  }
+  function select(sym,user){
+    if(SYMS.indexOf(sym)<0) sym='ISPH'; S.sym=sym; var D=S.all[sym]||{};
+    S.latest=D.latest||null; S.prices=D.prices||null; S.analysis=D.analysis||null; S.log=D.log||[]; S.pos=S.posAll[sym]||null;
+    $('posShares').value=S.pos?S.pos.shares:''; $('posCost').value=S.pos?S.pos.cost:''; $('posMsg').textContent='';
+    renderTabs(); renderPortfolio();
+    if(S.latest){ renderLatest(); renderChart(); renderAnalysis(); renderLog() } else { $('main').hidden=true; $('empty').hidden=false }
+    if(user){ try{ history.replaceState(null,'','#'+sym.toLowerCase()) }catch(e){ location.hash=sym.toLowerCase() } }
+  }
+  window.addEventListener('hashchange',function(){ var h=location.hash.slice(1).toUpperCase(); if(h&&h!==S.sym&&SYMS.indexOf(h)>=0) select(h) });
 
   // ---------- data ----------
   function fail(h,p){ if(S.latest) return; $('emptyH').textContent=h; $('emptyP').textContent=p; $('asof').textContent='' }
-  var stamp=null;
+  var stamps={};
   function load(){
-    fetch('data.json',{cache:'no-store'}).then(function(r){ if(!r.ok) throw new Error(r.status); return r.json() }).then(function(D){
-      if(!D||!D.latest) throw new Error('empty');
-      if(D.latest.updated_at===stamp) return; stamp=D.latest.updated_at;
-      S.latest=D.latest; S.prices=D.prices; S.analysis=D.analysis; S.log=D.log||[];
-      renderLatest(); renderChart(); renderAnalysis(); renderLog();
-    }).catch(function(){ fail('The data could not be loaded','Reload the page. If it keeps failing, the latest update may still be publishing; try again in a minute.') });
+    SYMS.forEach(function(sym){
+      fetch('data-'+sym.toLowerCase()+'.json',{cache:'no-store'}).then(function(r){ if(!r.ok) throw new Error(r.status); return r.json() }).then(function(D){
+        if(!D||!D.latest) throw new Error('empty');
+        if(D.latest.updated_at===stamps[sym]) return; stamps[sym]=D.latest.updated_at;
+        S.all[sym]=D; if(sym===S.sym) select(sym); else { renderTabs(); renderPortfolio() }
+      }).catch(function(){ if(sym===S.sym) fail('The data could not be loaded','Reload the page. If it keeps failing, the latest update may still be publishing; try again in a minute.') });
+    });
   }
-  load(); setInterval(load,180000);
+  var h0=location.hash.slice(1).toUpperCase(); if(SYMS.indexOf(h0)>=0) S.sym=h0;
+  renderTabs(); load(); setInterval(load,180000);
   document.addEventListener('visibilitychange',function(){ if(!document.hidden) load() });
 })();
 </script>

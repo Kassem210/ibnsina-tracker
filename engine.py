@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """ISPH (Ibnsina Pharma, EGX) daily signal engine.
 
-Usage: python3 engine.py --prev data.json --out data.json [--news-assessment news_assessment.json]
-                         [--analysis analysis.json]
+Usage: python3 engine.py --symbol ISPH --prev data-isph.json --out data-isph.json
+                         [--news-assessment news_assessment.json] [--analysis analysis.json]
+Symbols: ISPH (Ibnsina Pharma), ACTF (Act Financial).
 Fetches prices (Yahoo Finance) + headlines (Google News RSS), computes indicators, a scored
 BUY / SELL / HOLD signal with a written reason for every component, and a backtest of the
 technical rules. Reads the previously published data.json (signal log, index history, written
@@ -13,6 +14,14 @@ import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 
 UA = {"User-Agent": "Mozilla/5.0"}
+STOCKS = {
+    "ISPH": dict(name="Ibnsina Pharma", yahoo="ISPH.CA", sa="EGX-ISPH", news=['"Ibnsina Pharma"', '"ابن سينا فارما"'], must=["ibnsina", "ابن سينا", "isph"],
+                 fx_bad="A sliding pound raises Ibnsina's financing costs and squeezes fixed-price drug margins.",
+                 fx_ok="The pound is stable enough not to pressure margins or financing costs."),
+    "ACTF": dict(name="Act Financial", yahoo=None, sa="EGX-ACTF", news=['"Act Financial" Egypt', '"Act Financial" EGX', '"اكت فاينانشال"'], must=["act financial", "اكت فاينانشال", "actf"],
+                 fx_bad="A sliding pound usually comes with higher rates and weaker local sentiment, which marks down an investment company's holdings.",
+                 fx_ok="The pound is stable, which removes one source of pressure on the value of its holdings."),
+}
 BUY_TH, SELL_TH = 4, -4
 
 
@@ -51,14 +60,48 @@ def yahoo(sym, rng="3y"):
     return rows, sorted(divs, key=lambda x: x["d"])
 
 
-def news_feed():
+def stockanalysis(code):
+    """Daily history from stockanalysis.com: closes since listing, plus open/high/low/volume for recent months."""
+    base = "https://api.stockanalysis.com/api/"
+    ch = json.loads(get(base + "charts/a/" + code + "/MAX/l"))["data"]
+    rows = {}
+    for x in ch:
+        d = dt.datetime.fromtimestamp(x["t"], dt.timezone.utc).date().isoformat()
+        rows[d] = dict(d=d, o=x["c"], h=x["c"], l=x["c"], c=x["c"], v=0)
+    try:
+        h = json.loads(get(base + "symbol/a/" + code + "/history?type=full"))["data"]
+        h = h["data"] if isinstance(h, dict) else h
+        for x in h:
+            if x.get("c") is not None:
+                rows[x["t"]] = dict(d=x["t"], o=x.get("o") or x["c"], h=x.get("h") or x["c"], l=x.get("l") or x["c"], c=x["c"], v=x.get("v") or 0)
+    except Exception as e:
+        print("OHLCV detail fetch failed:", e, file=sys.stderr)
+    return [rows[k] for k in sorted(rows)], []
+
+
+def load_prices(cfg):
+    err = None
+    for src in ("yahoo", "sa"):
+        if not cfg.get(src):
+            continue
+        try:
+            rows, divs = yahoo(cfg[src]) if src == "yahoo" else stockanalysis(cfg[src])
+            if len(rows) >= 260:
+                return rows, divs, "Yahoo Finance" if src == "yahoo" else "StockAnalysis"
+        except Exception as e:
+            err = e
+            print(src, "price fetch failed:", e, file=sys.stderr)
+    sys.exit("no usable price history: %s" % err)
+
+
+def news_feed(queries, must=()):
     items, seen = [], set()
-    for q in ('"Ibnsina Pharma"', '"ابن سينا فارما"'):
+    for q in queries:
         try:
             raw = get("https://news.google.com/rss/search?q=" + urllib.parse.quote(q) + "+when:30d&hl=en-US&gl=US&ceid=US:en")
             for it in ET.fromstring(raw).iter("item"):
                 title = (it.findtext("title") or "").strip()
-                if title in seen:
+                if title in seen or (must and not any(m in title.lower() for m in must)):
                     continue
                 seen.add(title)
                 try:
@@ -233,14 +276,13 @@ def backtest(rows, I):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", required=True); ap.add_argument("--symbol", default="ISPH", choices=sorted(STOCKS))
     ap.add_argument("--prev"); ap.add_argument("--news-assessment"); ap.add_argument("--analysis")
     a = ap.parse_args()
     prev = json.load(open(a.prev)) if a.prev and os.path.exists(a.prev) else {}
 
-    rows, divs = yahoo("ISPH.CA")
-    if len(rows) < 260:
-        sys.exit("not enough ISPH history returned")
+    cfg = STOCKS[a.symbol]
+    rows, divs, source = load_prices(cfg)
     I = build(rows)
     i = len(rows) - 1
     c, prev_c = rows[i]["c"], rows[i - 1]["c"]
@@ -275,13 +317,13 @@ def main():
         usd = fx[-1]["c"]; ch20 = (usd / fx[-21]["c"] - 1) * 100
         s = -1 if ch20 > 3 else 0
         comps.append(dict(group="Market", name="USD/EGP", score=s, max=1,
-                          text=f"The dollar is at EGP {usd:.2f}, {ch20:+.1f}% in 20 sessions. " + ("A sliding pound raises Ibnsina's financing costs and squeezes fixed-price drug margins." if s < 0 else "The pound is stable enough not to pressure margins or financing costs.")))
+                          text=f"The dollar is at EGP {usd:.2f}, {ch20:+.1f}% in 20 sessions. " + (cfg["fx_bad"] if s < 0 else cfg["fx_ok"])))
         market["usd"], market["usd_ch20"] = round(usd, 2), round(ch20, 1)
     except Exception as e:
         print("FX fetch failed:", e, file=sys.stderr)
 
     # ----- news -----
-    news = news_feed()
+    news = news_feed(cfg["news"], cfg.get("must", ()))
     na = dict(score=0, text="No analyst reading of the headlines was supplied for this run, so news is scored neutral.", items=[])
     if a.news_assessment and os.path.exists(a.news_assessment):
         na.update(json.load(open(a.news_assessment)))
@@ -314,6 +356,7 @@ def main():
 
     bt = backtest(rows, I)
     latest = dict(
+        symbol=a.symbol, name=cfg["name"], source=source,
         asof=rows[i]["d"], updated_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="minutes"),
         close=round(c, 2), prev_close=round(prev_c, 2), change_pct=round((c / prev_c - 1) * 100, 2),
         open=round(rows[i]["o"], 2), high=round(rows[i]["h"], 2), low=round(rows[i]["l"], 2), volume=rows[i]["v"],
@@ -345,7 +388,7 @@ def main():
     analysis = json.load(open(a.analysis)) if a.analysis and os.path.exists(a.analysis) else prev.get("analysis")
     latest["runs_today"] = ((prev.get("latest") or {}).get("runs_today", 0) + 1) if (prev.get("latest") or {}).get("updated_at", "")[:10] == latest["updated_at"][:10] else 1
     json.dump(dict(latest=latest, prices=prices, market=market, log=log, analysis=analysis), open(a.out, "w"), ensure_ascii=False)
-    print(json.dumps(dict(asof=latest["asof"], close=latest["close"], signal=action, prev_day_signal=prev_action, changed=latest["changed"],
+    print(json.dumps(dict(symbol=a.symbol, asof=latest["asof"], close=latest["close"], signal=action, prev_day_signal=prev_action, changed=latest["changed"],
                           last_run_signal=last_run_action, notify=bool(last_run_action and last_run_action != action),
                           stop=latest["levels"]["stop"], support=latest["levels"]["support"],
                           score=score, headline=head, backtest={k: bt[k] for k in ("n", "wins", "strat_ret", "buyhold_ret", "avg_win", "avg_loss", "in_position")}), indent=1, ensure_ascii=False))
